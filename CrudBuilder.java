@@ -15,7 +15,7 @@ public class CrudBuilder {
     private final String tableName;
     private final VBox formVBox = new VBox(10);
     private final TableView<Map<String, String>> table = new TableView<>();
-    private final Map<String, TextField> fieldInputs = new LinkedHashMap<>();
+    private final Map<String, Control> fieldInputs = new LinkedHashMap<>();
 
     private final Button btnAdd = new Button("Adicionar");
     private final Button btnMod = new Button("Modificar");
@@ -50,23 +50,71 @@ public class CrudBuilder {
         int col = 0;
 
         for (String column : db.getColumnNames(tableName)) {
-
-            String traduccionAtributo= diccionario.getTraduccion(tableName,column);
+            String traduccionAtributo = diccionario.getTraduccionAtributo(tableName, column);
 
             Label label = new Label(traduccionAtributo);
-            TextField textField = new TextField();
-            textField.setPromptText(traduccionAtributo);
-            if (column.toLowerCase().endsWith("estreg")) {
-                textField.setText("A");
-                textField.setPrefColumnCount(1);
-                textField.setMaxWidth(25); // espacio para un carácter
-                textField.setDisable(true);
-            }
-            
-            HBox fieldBox = new HBox(10, label, textField);
+            Control inputControl;
 
+            boolean isForeignKey = db.isForeignKey(tableName, column);
+
+            if (isForeignKey) {
+                String foreignTable = db.getTableForeign(tableName, column);
+                String primaryKeyForeign = db.getPrimaryKeyColumn(foreignTable);
+                String EstRegColumnForeign = db.getEstRegColumn(foreignTable);
+
+                ComboBox<String> comboBox = new ComboBox<>();
+                comboBox.setPromptText("Seleccionar Codigo ");
+
+                comboBox.setButtonCell(new ListCell<>() {
+                    @Override
+                    protected void updateItem(String item, boolean empty) {
+                        super.updateItem(item, empty);
+                        if (empty || item == null) {
+                            setText(comboBox.getPromptText());
+                        } else {
+                            setText(item);
+                        }
+                    }
+                });
+                comboBox.setCellFactory(lv -> new ListCell<>() {
+                    @Override
+                    protected void updateItem(String item, boolean empty) {
+                        super.updateItem(item, empty);
+                        setText(empty ? null : item);
+                    }
+                });
+
+                List<Map<String, String>> foreignData = db.selectColumns(foreignTable,new String[]{primaryKeyForeign},EstRegColumnForeign);
+
+                // Llenar ComboBox con los valores del campo clave primaria
+                for (Map<String, String> rowForeignData : foreignData) {
+                    String valor = rowForeignData.get(primaryKeyForeign);
+                    if (valor != null) {
+                        comboBox.getItems().add(valor);
+                    }
+                }
+
+                inputControl = comboBox;
+            } else {
+                TextField textField = new TextField();
+                textField.setPromptText(traduccionAtributo);
+                inputControl = textField;
+            }
+
+            // Si el atributo termina en 'EstReg'
+            if (column.toLowerCase().endsWith("estreg")) {
+                if (inputControl instanceof TextField tf) {
+                    tf.setText("A");
+                    tf.setPrefColumnCount(1);
+                    tf.setMaxWidth(25);
+                    tf.setDisable(true);
+                }
+            }
+
+            HBox fieldBox = new HBox(10, label, inputControl);
             formGrid.add(fieldBox, col, row);
-            fieldInputs.put(column, textField);
+
+            fieldInputs.put(column, inputControl); // guarda el Control (TextField o ComboBox)
 
             row++;
             if (row == 4) {
@@ -195,11 +243,15 @@ public class CrudBuilder {
         Map<String, String> sel = table.getSelectionModel().getSelectedItem();
         if (sel == null) return;
 
-        for (Map.Entry<String, TextField> entry : fieldInputs.entrySet()) {
+        for (Map.Entry<String, Control> entry : fieldInputs.entrySet()) {
             String column = entry.getKey();
-            TextField field = entry.getValue();
+            Control control = entry.getValue();
             String value = sel.get(column);
-            field.setText(value != null ? value : "");
+            if (control instanceof TextField tf) {
+                tf.setText(value != null ? value : "");
+            } else if (control instanceof ComboBox cb) {
+                cb.getSelectionModel().select(value);
+            }
         }
     }
 
@@ -207,45 +259,59 @@ public class CrudBuilder {
         Map<String, String> sel = table.getSelectionModel().getSelectedItem();
         if (sel == null) return;
         flagAction = 1;
-        setFormEnabled(false,new ArrayList<>());//todos se inhabilitan
+        setFormEnabled(false, new ArrayList<>());
         moveAtributesToForm();
         String estadoColumn = getEstadoColumnName();
-        
+
         if (fieldInputs.containsKey(estadoColumn)) {
-            fieldInputs.get(estadoColumn).setText(String.valueOf(st));
-            fieldInputs.get(estadoColumn).setDisable(true);
+            Control ctrl = fieldInputs.get(estadoColumn);
+            if (ctrl instanceof TextField tf) {
+                tf.setText(String.valueOf(st));
+                tf.setDisable(true);
+            }
         }
         setButtons(false, true);
     }
 
     private void doUpdate() {
         if (flagAction != 1) return;
-        boolean hayVacios = fieldInputs.values().stream()
-        .anyMatch(tf -> tf.getText().trim().isEmpty());
+
+        boolean hayVacios = fieldInputs.values().stream().anyMatch(control -> {
+            if (control instanceof TextField tf) {
+                return tf.getText().trim().isEmpty();
+            } else if (control instanceof ComboBox<?> cb) {
+                return cb.getValue() == null;
+            }
+            return false;
+        });
 
         if (hayVacios) {
-            showAlert("Por favor, complete todos los campos antes de agregar un nuevo registro.","información incompleta");
-            return; 
+            showAlert("Por favor, complete todos los campos antes de agregar un nuevo registro.", "Información incompleta");
+            return;
         }
+
         try {
-            // Recolectar los datos del formulario
             Map<String, String> data = new LinkedHashMap<>();
-            for (Map.Entry<String, TextField> entry : fieldInputs.entrySet()) {
-                data.put(entry.getKey(), entry.getValue().getText());
+            for (Map.Entry<String, Control> entry : fieldInputs.entrySet()) {
+                String value = "";
+                if (entry.getValue() instanceof TextField tf) {
+                    value = tf.getText();
+                } else if (entry.getValue() instanceof ComboBox cb) {
+                    Object selected = cb.getSelectionModel().getSelectedItem();
+                    value = selected != null ? selected.toString() : "";
+                }
+                data.put(entry.getKey(), value);
             }
 
             String primaryKey = db.getPrimaryKeyColumn(tableName);
-
             if (primaryKey == null) {
                 System.out.println("No se pudo detectar la clave primaria de la tabla " + tableName);
                 return;
             }
 
             if (fieldInputs.get(primaryKey).isDisabled()) {
-                // UPDATE
                 db.updateIntoTable(tableName, data);
             } else {
-                // INSERT
                 db.insertIntoTable(tableName, data);
             }
 
@@ -269,36 +335,30 @@ public class CrudBuilder {
         setButtons(true, false);
     }
 
-    private void clearForm(){
-        for (Map.Entry<String, TextField> entry : fieldInputs.entrySet()) {
-            String col = entry.getKey();
-            TextField field = entry.getValue();
-            
-            if (col.toLowerCase().endsWith("estreg")) {
-                field.setText("A"); // siempre con "A" para activo
-            } else {
-                field.clear();
+    private void clearForm() {
+        for (Map.Entry<String, Control> entry : fieldInputs.entrySet()) {
+            Control control = entry.getValue();
+            if (control instanceof TextField tf) {
+                if (entry.getKey().toLowerCase().endsWith("estreg")) {
+                    tf.setText("A");
+                } else {
+                    tf.clear();
+                }
+            } else if (control instanceof ComboBox cb) {
+                cb.getSelectionModel().clearSelection();
+
             }
         }
     }
     private void setFormEnabled(boolean enabled, List<String> alwaysDisabledSuffixes) {
-        for (Map.Entry<String, TextField> entry : fieldInputs.entrySet()) {
+        for (Map.Entry<String, Control> entry : fieldInputs.entrySet()) {
             String col = entry.getKey();
-            TextField field = entry.getValue();
+            Control control = entry.getValue();
 
-            boolean forceDisable = false;
-            for (String suffix : alwaysDisabledSuffixes) {
-                if (col.toLowerCase().endsWith(suffix.toLowerCase())) {
-                    forceDisable = true;
-                    break;
-                }
-            }
+            boolean forceDisable = alwaysDisabledSuffixes.stream()
+                    .anyMatch(suffix -> col.toLowerCase().endsWith(suffix.toLowerCase()));
 
-            if (forceDisable) {
-                field.setDisable(true);
-            } else {
-                field.setDisable(!enabled);
-            }
+            control.setDisable(forceDisable || !enabled);
         }
     }
 
@@ -332,7 +392,7 @@ public class CrudBuilder {
         a.setContentText(message);
         a.showAndWait();
     }
-    public Map<String, TextField> getFieldInputs() {
+    public Map<String, Control> getFieldInputs() {
         return fieldInputs;
     }
 } 

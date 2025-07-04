@@ -309,7 +309,7 @@ public class Diccionario {
         etiquetas.put("ESCALA_BONIFICACION", escala_bonificacion);
     }
 
-    public String getTraduccion(String tabla, String atributo) {
+    public String getTraduccionAtributo(String tabla, String atributo) {
         Map<String, String> tablaEtiquetas = etiquetas.get(tabla.toUpperCase());
         if (tablaEtiquetas != null && tablaEtiquetas.containsKey(atributo)) {
             return tablaEtiquetas.get(atributo);

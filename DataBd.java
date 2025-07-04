@@ -48,6 +48,17 @@ public class DataBd implements AutoCloseable {
         }
         return false;
     }
+    public String getTableForeign(String tableName, String columnName) throws SQLException {
+        try (ResultSet rs = metaData.getImportedKeys(null, null, tableName)) {
+            while (rs.next()) {
+                String fkColumn = rs.getString("FKCOLUMN_NAME");
+                if (fkColumn.equalsIgnoreCase(columnName)) {
+                    return rs.getString("PKTABLE_NAME"); // nombre de la tabla referenciada
+                }
+            }
+        }
+        return null; // no es clave foránea o no encontrada
+    }
     public void insertIntoTable(String tableName, Map<String, String> data) throws SQLException {
         if (data.isEmpty()) return;
         
@@ -100,7 +111,6 @@ public class DataBd implements AutoCloseable {
 
         String columnList = String.join(", ", columns);
         String sql = "SELECT " + columnList + " FROM " + tableName + " WHERE "+EstRegColum+" = 'A'";
-
         try (PreparedStatement ps = conn.prepareStatement(sql);
             ResultSet rs = ps.executeQuery()) {
 
